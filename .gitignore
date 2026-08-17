@@ -1,0 +1,19 @@
+﻿# Python
+backend/venv/
+backend/.env
+__pycache__/
+*.pyc
+.env
+
+# Flutter
+child_app/build/
+child_app/.dart_tool/
+parent_app/build/
+parent_app/.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# OS
+.DS_Store
+Thumbs.db
+backend/.env

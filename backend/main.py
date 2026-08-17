@@ -137,7 +137,7 @@ def analyze_text(child_id: str, payload: dict, db: Session = Depends(get_db)):
         models.MonitoringSettings.child_id == child_id
     ).first()
 
-    result = detection.detect_language_layer1(text)
+    result = detection.detect_combined(text)
 
     created_events = []
 

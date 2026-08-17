@@ -4,7 +4,7 @@ import bcrypt
 import random, string
 
 from database import engine, get_db, Base
-import models, schemas
+import models, schemas, detection
 
 Base.metadata.create_all(bind=engine)
 
@@ -116,3 +116,59 @@ def create_event(data: schemas.EventCreate, db: Session = Depends(get_db)):
 @app.get("/children/{child_id}/events", response_model=list[schemas.EventOut])
 def list_events(child_id: str, db: Session = Depends(get_db)):
     return db.query(models.Event).filter(models.Event.child_id == child_id).order_by(models.Event.created_at.desc()).all()
+
+# ---------- DETECTION: analyze captured text ----------
+@app.post("/children/{child_id}/analyze")
+def analyze_text(child_id: str, payload: dict, db: Session = Depends(get_db)):
+    """
+    Receives captured text (from chat, notification listener, or OCR),
+    runs Layer 1 detection, and auto-creates an event if flagged.
+    Body: { "text": "the message to check", "source": "chat|notification|ocr" }
+    """
+    child = db.query(models.Child).filter(models.Child.id == child_id).first()
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+
+    text = payload.get("text", "")
+    source = payload.get("source", "unknown")
+
+    # check this child's settings - only run if the feature is enabled
+    settings = db.query(models.MonitoringSettings).filter(
+        models.MonitoringSettings.child_id == child_id
+    ).first()
+
+    result = detection.detect_language_layer1(text)
+
+    created_events = []
+
+    # language event
+    if result["is_offensive"] and (not settings or settings.language_enabled):
+        event = models.Event(
+            child_id=child_id,
+            type="language",
+            content=f"[{source}] {text}",
+            detected_language="derja/mixed",
+            severity=result["severity"] or "low",
+        )
+        db.add(event)
+        created_events.append("language")
+
+    # bullying event
+    if result["is_bullying"] and (not settings or settings.bullying_enabled):
+        event = models.Event(
+            child_id=child_id,
+            type="bullying",
+            content=f"[{source}] {text}",
+            detected_language="derja/mixed",
+            severity="medium",
+        )
+        db.add(event)
+        created_events.append("bullying")
+
+    db.commit()
+
+    return {
+        "analyzed": text,
+        "result": result,
+        "events_created": created_events,
+    }

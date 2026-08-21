@@ -79,8 +79,37 @@ class _ChatScreenState extends State<ChatScreen> {
 
     Future<void> _requestCapture() async {
     try {
-      final res = await platform.invokeMethod('captureAndOcr');
-      setState(() => _nativeReply = 'Screen OCR: $res');
+      final ocrText = await platform.invokeMethod('captureAndOcr');
+      setState(() => _nativeReply = 'Screen OCR: $ocrText\nAnalyzing...');
+
+      if (ocrText == null || ocrText.toString().trim().isEmpty) {
+        setState(() => _nativeReply = 'Screen OCR: (no text found)');
+        return;
+      }
+
+      // Send the captured screen text to the SAME detection endpoint.
+      final response = await http.post(
+        Uri.parse('$baseUrl/children/$childId/analyze'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'text': ocrText.toString(), 'source': 'screen_ocr'}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final result = data['result'] ?? {};
+        final offensive = result['is_offensive'] ?? false;
+        final bullying = result['is_bullying'] ?? false;
+        final events = data['events_created'] ?? [];
+
+        final verdict = (offensive || bullying)
+            ? '⚠️ FLAGGED (${events.join(", ")})'
+            : '✓ clean';
+
+        setState(() => _nativeReply =
+            'Screen OCR analyzed:\n"$ocrText"\n\nResult: $verdict');
+      } else {
+        setState(() => _nativeReply = 'Screen OCR: $ocrText\n(analyze failed: ${response.statusCode})');
+      }
     } catch (e) {
       setState(() => _nativeReply = 'Capture error: $e');
     }

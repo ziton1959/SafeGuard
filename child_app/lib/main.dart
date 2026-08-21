@@ -77,10 +77,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _requestCapture() async {
+    Future<void> _requestCapture() async {
     try {
-      final res = await platform.invokeMethod('requestCapture');
-      setState(() => _nativeReply = 'Capture: $res');
+      final res = await platform.invokeMethod('captureAndOcr');
+      setState(() => _nativeReply = 'Screen OCR: $res');
     } catch (e) {
       setState(() => _nativeReply = 'Capture error: $e');
     }

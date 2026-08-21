@@ -68,12 +68,21 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-    Future<void> _testOcr() async {
+  Future<void> _testOcr() async {
     try {
       final text = await platform.invokeMethod('testOcr');
       setState(() => _nativeReply = 'OCR read: $text');
     } catch (e) {
       setState(() => _nativeReply = 'OCR error: $e');
+    }
+  }
+
+  Future<void> _requestCapture() async {
+    try {
+      final res = await platform.invokeMethod('requestCapture');
+      setState(() => _nativeReply = 'Capture: $res');
+    } catch (e) {
+      setState(() => _nativeReply = 'Capture error: $e');
     }
   }
 
@@ -139,6 +148,11 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: const Icon(Icons.text_snippet),
             onPressed: _testOcr,
             tooltip: 'Test OCR',
+          ),
+          IconButton(
+            icon: const Icon(Icons.screenshot_monitor),
+            onPressed: _requestCapture,
+            tooltip: 'Request screen capture',
           ),
         ],
       ),

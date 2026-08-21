@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
 
 // ⚠️ TEMPORARY: hardcoded child ID for demo.
 // LATER: replace with a pairing screen that stores the ID after linking.
@@ -54,6 +55,18 @@ class _ChatScreenState extends State<ChatScreen> {
   final _controller = TextEditingController();
   final List<Message> _messages = [];
   bool _sending = false;
+  // Stage 1: the bridge to native Kotlin
+  static const platform = MethodChannel('safeguard/ocr');
+  String _nativeReply = '';
+
+  Future<void> _testPing() async {
+    try {
+      final reply = await platform.invokeMethod('ping');
+      setState(() => _nativeReply = reply);
+    } catch (e) {
+      setState(() => _nativeReply = 'Bridge error: $e');
+    }
+  }
 
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
@@ -81,12 +94,14 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       setState(() {
-        _messages.add(Message(
-          text: text,
-          isOffensive: offensive,
-          isBullying: bullying,
-          reason: reason,
-        ));
+        _messages.add(
+          Message(
+            text: text,
+            isOffensive: offensive,
+            isBullying: bullying,
+            reason: reason,
+          ),
+        );
         _controller.clear();
       });
     } catch (e) {
@@ -105,9 +120,23 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('SafeGuard Chat'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.link),
+            onPressed: _testPing,
+            tooltip: 'Test native bridge',
+          ),
+        ],
       ),
       body: Column(
         children: [
+          if (_nativeReply.isNotEmpty)
+            Container(
+              width: double.infinity,
+              color: Colors.amber.shade100,
+              padding: const EdgeInsets.all(8),
+              child: Text('Native says: $_nativeReply'),
+            ),
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(12),
@@ -122,7 +151,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     padding: const EdgeInsets.all(12),
                     constraints: const BoxConstraints(maxWidth: 280),
                     decoration: BoxDecoration(
-                      color: flagged ? Colors.red.shade100 : Colors.teal.shade100,
+                      color: flagged
+                          ? Colors.red.shade100
+                          : Colors.teal.shade100,
                       borderRadius: BorderRadius.circular(12),
                       border: flagged
                           ? Border.all(color: Colors.red, width: 1.5)
@@ -136,10 +167,16 @@ class _ChatScreenState extends State<ChatScreen> {
                           const SizedBox(height: 6),
                           Row(
                             children: [
-                              const Icon(Icons.warning, color: Colors.red, size: 16),
+                              const Icon(
+                                Icons.warning,
+                                color: Colors.red,
+                                size: 16,
+                              ),
                               const SizedBox(width: 4),
                               Text(
-                                m.isBullying ? 'Bullying detected' : 'Offensive detected',
+                                m.isBullying
+                                    ? 'Bullying detected'
+                                    : 'Offensive detected',
                                 style: const TextStyle(
                                   color: Colors.red,
                                   fontSize: 12,
@@ -187,7 +224,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     ? const Padding(
                         padding: EdgeInsets.all(12),
                         child: SizedBox(
-                          height: 20, width: 20,
+                          height: 20,
+                          width: 20,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                       )

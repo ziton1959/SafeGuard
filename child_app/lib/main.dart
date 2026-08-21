@@ -68,6 +68,15 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+    Future<void> _testOcr() async {
+    try {
+      final text = await platform.invokeMethod('testOcr');
+      setState(() => _nativeReply = 'OCR read: $text');
+    } catch (e) {
+      setState(() => _nativeReply = 'OCR error: $e');
+    }
+  }
+
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
@@ -125,6 +134,11 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: const Icon(Icons.link),
             onPressed: _testPing,
             tooltip: 'Test native bridge',
+          ),
+          IconButton(
+            icon: const Icon(Icons.text_snippet),
+            onPressed: _testOcr,
+            tooltip: 'Test OCR',
           ),
         ],
       ),

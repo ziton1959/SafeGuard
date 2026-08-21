@@ -2,6 +2,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+// ⚠️ TEMPORARY: hardcoded child ID for demo.
+// LATER: replace with a pairing screen that stores the ID after linking.
+const String childId = 'bd6b71ef-8e6e-4dcc-9822-6a30ba587f24';
+
+// The emulator reaches your PC via 10.0.2.2
+const String baseUrl = 'http://10.0.2.2:8000';
+
 void main() {
   runApp(const SafeGuardApp());
 }
@@ -17,65 +24,78 @@ class SafeGuardApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
       ),
-      home: const RegisterScreen(),
+      home: const ChatScreen(),
     );
   }
 }
 
-class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+class Message {
+  final String text;
+  final bool isOffensive;
+  final bool isBullying;
+  final String? reason;
 
-  @override
-  State<RegisterScreen> createState() => _RegisterScreenState();
+  Message({
+    required this.text,
+    this.isOffensive = false,
+    this.isBullying = false,
+    this.reason,
+  });
 }
 
-class _RegisterScreenState extends State<RegisterScreen> {
-  // The special address the Android emulator uses to reach your PC.
-  static const String baseUrl = 'http://10.0.2.2:8000';
+class ChatScreen extends StatefulWidget {
+  const ChatScreen({super.key});
 
-  final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
 
-  String _status = '';
-  bool _loading = false;
+class _ChatScreenState extends State<ChatScreen> {
+  final _controller = TextEditingController();
+  final List<Message> _messages = [];
+  bool _sending = false;
 
-  Future<void> _register() async {
-    setState(() {
-      _loading = true;
-      _status = '';
-    });
+  Future<void> _sendMessage() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+
+    setState(() => _sending = true);
 
     try {
       final response = await http.post(
-        Uri.parse('$baseUrl/parents/register'),
+        Uri.parse('$baseUrl/children/$childId/analyze'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'full_name': _nameController.text,
-          'email': _emailController.text,
-          'password': _passwordController.text,
-        }),
+        body: jsonEncode({'text': text, 'source': 'chat'}),
       );
+
+      bool offensive = false;
+      bool bullying = false;
+      String? reason;
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        setState(() {
-          _status = 'Success! Parent created.\nID: ${data['id']}';
-        });
-      } else {
-        final data = jsonDecode(response.body);
-        setState(() {
-          _status = 'Error: ${data['detail'] ?? response.statusCode}';
-        });
+        final result = data['result'] ?? {};
+        offensive = result['is_offensive'] ?? false;
+        bullying = result['is_bullying'] ?? false;
+        reason = result['layer2_reason'];
       }
+
+      setState(() {
+        _messages.add(Message(
+          text: text,
+          isOffensive: offensive,
+          isBullying: bullying,
+          reason: reason,
+        ));
+        _controller.clear();
+      });
     } catch (e) {
       setState(() {
-        _status = 'Connection failed: $e';
+        _messages.add(Message(text: '$text  (connection failed)'));
+        _controller.clear();
       });
     } finally {
-      setState(() {
-        _loading = false;
-      });
+      setState(() => _sending = false);
     }
   }
 
@@ -83,58 +103,102 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SafeGuard — Register'),
+        title: const Text('SafeGuard Chat'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 12),
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(
-                labelText: 'Full name',
-                border: OutlineInputBorder(),
-              ),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                final m = _messages[index];
+                final flagged = m.isOffensive || m.isBullying;
+                return Align(
+                  alignment: Alignment.centerRight,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.all(12),
+                    constraints: const BoxConstraints(maxWidth: 280),
+                    decoration: BoxDecoration(
+                      color: flagged ? Colors.red.shade100 : Colors.teal.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                      border: flagged
+                          ? Border.all(color: Colors.red, width: 1.5)
+                          : null,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(m.text, style: const TextStyle(fontSize: 15)),
+                        if (flagged) ...[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              const Icon(Icons.warning, color: Colors.red, size: 16),
+                              const SizedBox(width: 4),
+                              Text(
+                                m.isBullying ? 'Bullying detected' : 'Offensive detected',
+                                style: const TextStyle(
+                                  color: Colors.red,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (m.reason != null && m.reason!.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                m.reason!,
+                                style: TextStyle(
+                                  color: Colors.red.shade900,
+                                  fontSize: 11,
+                                  fontStyle: FontStyle.italic,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _emailController,
-              decoration: const InputDecoration(
-                labelText: 'Email',
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.emailAddress,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    decoration: const InputDecoration(
+                      hintText: 'Type a message...',
+                      border: OutlineInputBorder(),
+                    ),
+                    onSubmitted: (_) => _sendMessage(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _sending
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          height: 20, width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : IconButton.filled(
+                        onPressed: _sendMessage,
+                        icon: const Icon(Icons.send),
+                      ),
+              ],
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _passwordController,
-              decoration: const InputDecoration(
-                labelText: 'Password',
-                border: OutlineInputBorder(),
-              ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 24),
-            FilledButton(
-              onPressed: _loading ? null : _register,
-              child: _loading
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Register'),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              _status,
-              style: const TextStyle(fontSize: 14),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

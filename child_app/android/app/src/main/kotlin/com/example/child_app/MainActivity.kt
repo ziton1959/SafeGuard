@@ -31,6 +31,7 @@ class MainActivity : FlutterActivity() {
     private var mediaProjection: MediaProjection? = null
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
+    private var captureReady = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -40,8 +41,8 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "ping" -> result.success("pong from Kotlin!")
                     "testOcr" -> runTestOcr(result)
-                    "captureAndOcr" -> {
-                        // Start the permission flow; capture happens after grant.
+                    "startMonitoring" -> {
+                        // Ask permission ONCE, set up persistent capture.
                         pendingResult = result
                         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE)
                                 as MediaProjectionManager
@@ -49,6 +50,14 @@ class MainActivity : FlutterActivity() {
                             mpm.createScreenCaptureIntent(),
                             SCREEN_CAPTURE_REQUEST
                         )
+                    }
+                    "grabFrame" -> {
+                        // Called repeatedly by the Dart timer. No permission prompt.
+                        grabFrameAndOcr(result)
+                    }
+                    "stopMonitoring" -> {
+                        cleanup()
+                        result.success("stopped")
                     }
                     else -> result.notImplemented()
                 }
@@ -59,13 +68,10 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SCREEN_CAPTURE_REQUEST) {
             if (resultCode == Activity.RESULT_OK && data != null) {
-                // Start the foreground service FIRST (required before capture).
                 val serviceIntent = Intent(this, ScreenCaptureService::class.java)
                 startForegroundService(serviceIntent)
-
-                // Give the service a moment to become foreground, then capture.
                 Handler(Looper.getMainLooper()).postDelayed({
-                    startCapture(resultCode, data)
+                    setupCapture(resultCode, data)
                 }, 500)
             } else {
                 pendingResult?.success("Permission denied")
@@ -74,16 +80,13 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun startCapture(resultCode: Int, data: Intent) {
+    private fun setupCapture(resultCode: Int, data: Intent) {
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE)
                 as MediaProjectionManager
         mediaProjection = mpm.getMediaProjection(resultCode, data)
 
-        // Android 14+ requires a callback registered before capture starts.
         mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                cleanup()
-            }
+            override fun onStop() { cleanup() }
         }, Handler(Looper.getMainLooper()))
 
         val metrics = DisplayMetrics()
@@ -92,9 +95,7 @@ class MainActivity : FlutterActivity() {
         val height = metrics.heightPixels
         val density = metrics.densityDpi
 
-        // ImageReader receives the screen frames.
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "SafeGuardCapture",
             width, height, density,
@@ -102,22 +103,23 @@ class MainActivity : FlutterActivity() {
             imageReader?.surface, null, null
         )
 
-        // Wait a moment for a frame to arrive, then grab it.
-        Handler(Looper.getMainLooper()).postDelayed({
-            grabFrameAndOcr()
-        }, 800)
+        captureReady = true
+        // tell Dart setup succeeded so it can start the timer
+        pendingResult?.success("monitoring_started")
+        pendingResult = null
     }
 
-    private fun grabFrameAndOcr() {
+    private fun grabFrameAndOcr(result: MethodChannel.Result) {
+        if (!captureReady || imageReader == null) {
+            result.success("(not ready)")
+            return
+        }
         try {
             val image = imageReader?.acquireLatestImage()
             if (image == null) {
-                pendingResult?.success("No frame captured")
-                cleanup()
+                result.success("(no frame)")
                 return
             }
-
-            // Convert the raw image buffer into a Bitmap.
             val planes = image.planes
             val buffer = planes[0].buffer
             val pixelStride = planes[0].pixelStride
@@ -132,37 +134,29 @@ class MainActivity : FlutterActivity() {
             bitmap.copyPixelsFromBuffer(buffer)
             image.close()
 
-            // Run OCR on the captured screen.
             val inputImage = InputImage.fromBitmap(bitmap, 0)
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             recognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
-                    val text = if (visionText.text.isBlank()) "(no text found on screen)"
-                               else visionText.text
-                    pendingResult?.success(text)
-                    pendingResult = null
-                    cleanup()
+                    result.success(if (visionText.text.isBlank()) "(no text)" else visionText.text)
                 }
                 .addOnFailureListener { e ->
-                    pendingResult?.error("OCR_FAILED", e.message, null)
-                    pendingResult = null
-                    cleanup()
+                    result.success("(ocr failed: ${e.message})")
                 }
         } catch (e: Exception) {
-            pendingResult?.error("CAPTURE_FAILED", e.message, null)
-            pendingResult = null
-            cleanup()
+            result.success("(error: ${e.message})")
         }
     }
 
     private fun cleanup() {
+        captureReady = false
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()
         virtualDisplay = null
         imageReader = null
         mediaProjection = null
-        stopService(Intent(this, ScreenCaptureService::class.java))
+        try { stopService(Intent(this, ScreenCaptureService::class.java)) } catch (_: Exception) {}
     }
 
     private fun runTestOcr(result: MethodChannel.Result) {

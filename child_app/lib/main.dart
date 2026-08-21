@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
+import 'dart:async';
 
 // ⚠️ TEMPORARY: hardcoded child ID for demo.
 // LATER: replace with a pairing screen that stores the ID after linking.
@@ -58,6 +59,10 @@ class _ChatScreenState extends State<ChatScreen> {
   // Stage 1: the bridge to native Kotlin
   static const platform = MethodChannel('safeguard/ocr');
   String _nativeReply = '';
+  Timer? _monitorTimer;
+  bool _monitoring = false;
+  int _scanCount = 0;
+  int _flagCount = 0;
 
   Future<void> _testPing() async {
     try {
@@ -77,42 +82,81 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-    Future<void> _requestCapture() async {
-    try {
-      final ocrText = await platform.invokeMethod('captureAndOcr');
-      setState(() => _nativeReply = 'Screen OCR: $ocrText\nAnalyzing...');
+  Future<void> _toggleMonitoring() async {
+    if (_monitoring) {
+      // stop
+      _monitorTimer?.cancel();
+      await platform.invokeMethod('stopMonitoring');
+      setState(() {
+        _monitoring = false;
+        _nativeReply =
+            'Monitoring stopped. Scans: $_scanCount, Flagged: $_flagCount';
+      });
+      return;
+    }
 
-      if (ocrText == null || ocrText.toString().trim().isEmpty) {
-        setState(() => _nativeReply = 'Screen OCR: (no text found)');
-        return;
+    // start: ask permission once
+    try {
+      final res = await platform.invokeMethod('startMonitoring');
+      if (res == 'monitoring_started') {
+        setState(() {
+          _monitoring = true;
+          _scanCount = 0;
+          _flagCount = 0;
+          _nativeReply = 'Monitoring active...';
+        });
+        // start the periodic scan every 4 seconds
+        _monitorTimer = Timer.periodic(
+          const Duration(seconds: 4),
+          (_) => _scanOnce(),
+        );
+      } else {
+        setState(() => _nativeReply = 'Could not start: $res');
+      }
+    } catch (e) {
+      setState(() => _nativeReply = 'Start error: $e');
+    }
+  }
+
+  Future<void> _scanOnce() async {
+    try {
+      final ocrText = await platform.invokeMethod('grabFrame');
+      final text = ocrText?.toString() ?? '';
+      if (text.isEmpty || text.startsWith('(')) {
+        return; // no usable frame this cycle
       }
 
-      // Send the captured screen text to the SAME detection endpoint.
+      _scanCount++;
+
       final response = await http.post(
         Uri.parse('$baseUrl/children/$childId/analyze'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'text': ocrText.toString(), 'source': 'screen_ocr'}),
+        body: jsonEncode({'text': text, 'source': 'screen_ocr'}),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final result = data['result'] ?? {};
-        final offensive = result['is_offensive'] ?? false;
-        final bullying = result['is_bullying'] ?? false;
-        final events = data['events_created'] ?? [];
+        final flagged =
+            (result['is_offensive'] ?? false) ||
+            (result['is_bullying'] ?? false);
+        if (flagged) _flagCount++;
 
-        final verdict = (offensive || bullying)
-            ? '⚠️ FLAGGED (${events.join(", ")})'
-            : '✓ clean';
-
-        setState(() => _nativeReply =
-            'Screen OCR analyzed:\n"$ocrText"\n\nResult: $verdict');
-      } else {
-        setState(() => _nativeReply = 'Screen OCR: $ocrText\n(analyze failed: ${response.statusCode})');
+        setState(
+          () => _nativeReply =
+              'Monitoring active — scans: $_scanCount, flagged: $_flagCount'
+              '${flagged ? "\n⚠️ Just flagged something!" : ""}',
+        );
       }
     } catch (e) {
-      setState(() => _nativeReply = 'Capture error: $e');
+      // silent - keep monitoring
     }
+  }
+
+  @override
+  void dispose() {
+    _monitorTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _sendMessage() async {
@@ -179,9 +223,10 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: 'Test OCR',
           ),
           IconButton(
-            icon: const Icon(Icons.screenshot_monitor),
-            onPressed: _requestCapture,
-            tooltip: 'Request screen capture',
+            icon: Icon(_monitoring ? Icons.stop_circle : Icons.play_circle),
+            color: _monitoring ? Colors.red : null,
+            onPressed: _toggleMonitoring,
+            tooltip: _monitoring ? 'Stop monitoring' : 'Start monitoring',
           ),
         ],
       ),

@@ -5,6 +5,7 @@ import random, string
 
 from database import engine, get_db, Base
 import models, schemas, detection
+from datetime import datetime, timedelta
 
 Base.metadata.create_all(bind=engine)
 
@@ -140,9 +141,20 @@ def analyze_text(child_id: str, payload: dict, db: Session = Depends(get_db)):
     result = detection.detect_combined(text)
 
     created_events = []
-
-    # language event
-    if result["is_offensive"] and (not settings or settings.language_enabled):
+    def recent_duplicate(event_type: str) -> bool:
+        cutoff = datetime.utcnow() - timedelta(seconds=30)
+        existing = (
+            db.query(models.Event)
+            .filter(
+                models.Event.child_id == child_id,
+                models.Event.type == event_type,
+                models.Event.created_at >= cutoff,
+            )
+            .first()
+        )
+        return existing is not None
+        # language event
+    if result["is_offensive"] and (not settings or settings.language_enabled) and not recent_duplicate("language"):
         event = models.Event(
             child_id=child_id,
             type="language",
@@ -153,8 +165,8 @@ def analyze_text(child_id: str, payload: dict, db: Session = Depends(get_db)):
         db.add(event)
         created_events.append("language")
 
-    # bullying event
-    if result["is_bullying"] and (not settings or settings.bullying_enabled):
+        # bullying event
+    if result["is_bullying"] and (not settings or settings.bullying_enabled) and not recent_duplicate("bullying"):
         event = models.Event(
             child_id=child_id,
             type="bullying",

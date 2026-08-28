@@ -63,6 +63,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _monitoring = false;
   int _scanCount = 0;
   int _flagCount = 0;
+  String _lastScanned = '';
 
   Future<void> _testPing() async {
     try {
@@ -123,8 +124,14 @@ class _ChatScreenState extends State<ChatScreen> {
       final ocrText = await platform.invokeMethod('grabFrame');
       final text = ocrText?.toString() ?? '';
       if (text.isEmpty || text.startsWith('(')) {
-        return; // no usable frame this cycle
+        return;
       }
+
+      // Skip if the screen text hasn't meaningfully changed since last scan.
+      if (text == _lastScanned) {
+        return;
+      }
+      _lastScanned = text;
 
       _scanCount++;
 

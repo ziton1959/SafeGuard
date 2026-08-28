@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
 import 'dart:async';
+import 'package:geolocator/geolocator.dart';
 
 // ⚠️ TEMPORARY: hardcoded child ID for demo.
 // LATER: replace with a pairing screen that stores the ID after linking.
@@ -160,6 +161,96 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<Position?> _getLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return null;
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) return null;
+      }
+      if (permission == LocationPermission.deniedForever) return null;
+      return await Geolocator.getCurrentPosition();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<void> _sendSOS() async {
+    final pos = await _getLocation();
+    final locationText = pos != null
+        ? 'Location: ${pos.latitude.toStringAsFixed(6)}, ${pos.longitude.toStringAsFixed(6)}  '
+              '(https://maps.google.com/?q=${pos.latitude},${pos.longitude})'
+        : 'Location: unavailable';
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/events'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'child_id': childId,
+          'type': 'sos',
+          'content': 'SOS — child requested help. $locationText',
+          'severity': 'high',
+        }),
+      );
+      if (response.statusCode == 200 && mounted) {
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            icon: const Icon(Icons.check_circle, color: Colors.green, size: 48),
+            title: const Text('Help is on the way'),
+            content: Text(
+              pos != null
+                  ? 'Your parent has been alerted with your location.'
+                  : 'Your parent has been alerted.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not send SOS. Check connection.'),
+          ),
+        );
+      }
+    }
+  }
+
+  void _confirmSOS() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Send SOS?'),
+        content: const Text(
+          'This will immediately alert your parent that you need help.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(context);
+              _sendSOS();
+            },
+            child: const Text('Send SOS'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _monitorTimer?.cancel();
@@ -215,6 +306,15 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _confirmSOS,
+        backgroundColor: Colors.red,
+        icon: const Icon(Icons.emergency, color: Colors.white),
+        label: const Text(
+          'SOS',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+      ),
       appBar: AppBar(
         title: const Text('SafeGuard Chat'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,

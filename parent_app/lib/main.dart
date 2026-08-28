@@ -360,12 +360,21 @@ class _AlertsScreenState extends State<AlertsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+            appBar: AppBar(
         backgroundColor: kSurface,
         elevation: 0,
         foregroundColor: kTextDark,
         title: Text('${widget.childName}\'s alerts',
           style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 19)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.tune),
+            tooltip: 'Monitoring settings',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(
+              builder: (_) => SettingsScreen(childId: widget.childId, childName: widget.childName),
+            )),
+          ),
+        ],
       ),
       body: _loading
         ? const Center(child: CircularProgressIndicator(color: kIndigo))
@@ -443,6 +452,137 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   Text(when, style: const TextStyle(fontSize: 12, color: kTextMuted)),
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+// ============================================================
+// SETTINGS (feature toggles per child)
+// ============================================================
+class SettingsScreen extends StatefulWidget {
+  final String childId;
+  final String childName;
+  const SettingsScreen({super.key, required this.childId, required this.childName});
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  Map<String, dynamic> _settings = {};
+  bool _loading = true;
+
+  final _features = const [
+    {'key': 'language_enabled', 'title': 'Bad language detection', 'desc': 'Flag offensive words, incl. Derja & Arabizi', 'icon': Icons.record_voice_over_outlined},
+    {'key': 'bullying_enabled', 'title': 'Cyberbullying detection', 'desc': 'Detect harassment and hurtful messages', 'icon': Icons.sentiment_very_dissatisfied_outlined},
+    {'key': 'image_enabled', 'title': 'Image moderation', 'desc': 'Check pictures for explicit content', 'icon': Icons.image_outlined},
+    {'key': 'website_enabled', 'title': 'Website filtering', 'desc': 'Block unsafe or adult websites', 'icon': Icons.public_outlined},
+    {'key': 'duration_enabled', 'title': 'Screen time limits', 'desc': 'Alert when usage runs too long', 'icon': Icons.timer_outlined},
+    {'key': 'stranger_enabled', 'title': 'Stranger contact alerts', 'desc': 'Warn about unknown people messaging', 'icon': Icons.person_off_outlined},
+    {'key': 'mental_health_enabled', 'title': 'Wellbeing signals', 'desc': 'Notice distress and offer support', 'icon': Icons.favorite_outline},
+    {'key': 'sos_enabled', 'title': 'Emergency SOS', 'desc': 'Let your child send an urgent alert', 'icon': Icons.emergency_outlined},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final res = await http.get(Uri.parse('$baseUrl/children/${widget.childId}/settings'));
+      if (res.statusCode == 200) setState(() => _settings = jsonDecode(res.body));
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _toggle(String key, bool value) async {
+    setState(() => _settings[key] = value); // optimistic
+    try {
+      await http.patch(
+        Uri.parse('$baseUrl/children/${widget.childId}/settings'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({key: value}),
+      );
+    } catch (_) {
+      setState(() => _settings[key] = !value); // revert on failure
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Couldn\'t save. Check your connection.')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: kSurface,
+        elevation: 0,
+        foregroundColor: kTextDark,
+        title: Text('${widget.childName}\'s protection',
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 19)),
+      ),
+      body: _loading
+        ? const Center(child: CircularProgressIndicator(color: kIndigo))
+        : ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              const Text('Choose what SafeGuard watches for. Changes save automatically.',
+                style: TextStyle(color: kTextMuted, fontSize: 14)),
+              const SizedBox(height: 20),
+              ..._features.map((f) => _toggleCard(f)),
+            ],
+          ),
+    );
+  }
+
+  Widget _toggleCard(Map f) {
+    final key = f['key'] as String;
+    final on = _settings[key] == true;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: kCardBg,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 3))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              width: 44, height: 44,
+              decoration: BoxDecoration(
+                color: on ? kIndigo.withOpacity(0.12) : Colors.grey.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(f['icon'] as IconData, color: on ? kIndigo : kTextMuted, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(f['title'] as String,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: kTextDark)),
+                  const SizedBox(height: 3),
+                  Text(f['desc'] as String,
+                    style: const TextStyle(fontSize: 12.5, color: kTextMuted, height: 1.25)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Switch(
+              value: on,
+              activeColor: Colors.white,
+              activeTrackColor: kIndigo,
+              onChanged: (v) => _toggle(key, v),
             ),
           ],
         ),

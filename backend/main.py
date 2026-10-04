@@ -143,17 +143,18 @@ def analyze_text(child_id: str, payload: dict, db: Session = Depends(get_db)):
     created_events = []
     def recent_duplicate(event_type: str) -> bool:
         cutoff = datetime.utcnow() - timedelta(seconds=30)
+        tagged = f"[{source}] {text}"
         existing = (
             db.query(models.Event)
             .filter(
                 models.Event.child_id == child_id,
                 models.Event.type == event_type,
+                models.Event.content == tagged,
                 models.Event.created_at >= cutoff,
             )
             .first()
         )
-        return existing is not None
-        # language event
+        return existing is not None        # language event
     if result["is_offensive"] and (not settings or settings.language_enabled) and not recent_duplicate("language"):
         event = models.Event(
             child_id=child_id,

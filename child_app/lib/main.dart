@@ -54,6 +54,7 @@ class RootNav extends StatefulWidget {
 class _RootNavState extends State<RootNav> {
   int _index = 0;
   Timer? _monitorTimer;
+  Timer? _usageTimer;
   bool _monitoring = false;
   int _scanCount = 0;
   int _flagCount = 0;
@@ -63,6 +64,7 @@ class _RootNavState extends State<RootNav> {
   Future<void> _toggleMonitoring() async {
     if (_monitoring) {
       _monitorTimer?.cancel();
+      _usageTimer?.cancel();
       await platform.invokeMethod('stopMonitoring');
       setState(() {
         _monitoring = false;
@@ -82,6 +84,11 @@ class _RootNavState extends State<RootNav> {
         _monitorTimer = Timer.periodic(
           const Duration(seconds: 4),
           (_) => _scanOnce(),
+        );
+        _syncUsage();
+        _usageTimer = Timer.periodic(
+          const Duration(seconds: 60),
+          (_) => _syncUsage(),
         );
       } else {
         setState(() => _status = 'Could not start ($res)');
@@ -113,9 +120,34 @@ class _RootNavState extends State<RootNav> {
     } catch (_) {}
   }
 
+  Future<void> _syncUsage() async {
+    try {
+      final has = await platform.invokeMethod('hasUsagePermission');
+      if (has != true) {
+        await platform.invokeMethod('requestUsagePermission');
+        return;
+      }
+      final raw = await platform.invokeMethod('getUsageStats');
+      final List<dynamic> apps = jsonDecode(raw.toString());
+      await http.post(
+        Uri.parse('$baseUrl/children/$childId/usage'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'apps': apps}),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Screen time synced')));
+      }
+    } catch (e) {
+      debugPrint('Usage sync error: $e');
+    }
+  }
+
   @override
   void dispose() {
     _monitorTimer?.cancel();
+    _usageTimer?.cancel();
     super.dispose();
   }
 
@@ -133,9 +165,11 @@ class _RootNavState extends State<RootNav> {
       ),
     ];
     return Scaffold(
-      body: SafeArea(
-        child: IndexedStack(index: _index, children: pages),
+      floatingActionButton: FloatingActionButton(
+      onPressed: _syncUsage,
+      child: const Icon(Icons.bar_chart),
       ),
+      body: SafeArea(child: pages[_index]),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: kCard,
@@ -632,9 +666,11 @@ class _ChatScreenState extends State<ChatScreen> {
       String? reason;
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final events = (data['events_created'] ?? []) as List;
-        flagged = events.isNotEmpty;
-        reason = (data['result'] ?? {})['layer2_reason'];
+        final result = (data['result'] ?? {}) as Map;
+        flagged =
+            (result['is_offensive'] ?? false) ||
+            (result['is_bullying'] ?? false);
+        reason = result['layer2_reason'];
       }
       setState(() {
         _messages.add(Message(text: text, flagged: flagged, reason: reason));

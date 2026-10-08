@@ -5,7 +5,7 @@ import random, string
 
 from database import engine, get_db, Base
 import models, schemas, detection
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 Base.metadata.create_all(bind=engine)
 
@@ -115,8 +115,15 @@ def create_event(data: schemas.EventCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/children/{child_id}/events", response_model=list[schemas.EventOut])
-def list_events(child_id: str, db: Session = Depends(get_db)):
-    return db.query(models.Event).filter(models.Event.child_id == child_id).order_by(models.Event.created_at.desc()).all()
+def list_events(child_id: str, limit: int = 100, offset: int = 0, db: Session = Depends(get_db)):
+    return (
+        db.query(models.Event)
+        .filter(models.Event.child_id == child_id)
+        .order_by(models.Event.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
 # ---------- DETECTION: analyze captured text ----------
 @app.post("/children/{child_id}/analyze")
@@ -184,4 +191,74 @@ def analyze_text(child_id: str, payload: dict, db: Session = Depends(get_db)):
         "analyzed": text,
         "result": result,
         "events_created": created_events,
+    }
+
+# ---------- USAGE: child sends today's app usage ----------
+@app.post("/children/{child_id}/usage")
+def post_usage(child_id: str, payload: dict, db: Session = Depends(get_db)):
+    """
+    Body: { "apps": [ {"app": "YouTube", "seconds": 2700}, ... ] }
+    Replaces today's usage records for this child so the view stays current.
+    """
+    child = db.query(models.Child).filter(models.Child.id == child_id).first()
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+
+    apps = payload.get("apps", [])
+
+    # delete today's existing records for this child, then re-insert
+    start_of_day = datetime.combine(date.today(), datetime.min.time())
+    db.query(models.UsageRecord).filter(
+        models.UsageRecord.child_id == child_id,
+        models.UsageRecord.recorded_at >= start_of_day,
+    ).delete()
+
+    for item in apps:
+        _names = {
+            "com.google.android.youtube": "YouTube",
+            "com.google.android.apps.maps": "Google Maps",
+            "com.google.android.apps.nexuslauncher": "Home screen",
+            "com.android.chrome": "Chrome",
+            "com.instagram.android": "Instagram",
+            "com.zhiliaoapp.musically": "TikTok",
+            "com.whatsapp": "WhatsApp",
+            "com.facebook.katana": "Facebook",
+        }
+        raw_name = (item.get("app") or "Unknown")
+        name = _names.get(raw_name, raw_name)[:200]       
+        secs = int(item.get("seconds") or 0)
+        if secs <= 0:
+            continue
+        rec = models.UsageRecord(
+            child_id=child_id,
+            app_or_video=name,
+            duration_seconds=secs,
+        )
+        db.add(rec)
+
+    db.commit()
+    return {"stored": len(apps)}
+
+
+# ---------- USAGE: parent fetches today's top apps ----------
+@app.get("/children/{child_id}/usage/top")
+def get_top_usage(child_id: str, limit: int = 8, db: Session = Depends(get_db)):
+    start_of_day = datetime.combine(date.today(), datetime.min.time())
+    records = (
+        db.query(models.UsageRecord)
+        .filter(
+            models.UsageRecord.child_id == child_id,
+            models.UsageRecord.recorded_at >= start_of_day,
+        )
+        .order_by(models.UsageRecord.duration_seconds.desc())
+        .limit(limit)
+        .all()
+    )
+    total = sum(r.duration_seconds for r in records)
+    return {
+        "total_seconds": total,
+        "apps": [
+            {"app": r.app_or_video, "seconds": r.duration_seconds}
+            for r in records
+        ],
     }

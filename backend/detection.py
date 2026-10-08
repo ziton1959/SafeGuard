@@ -66,6 +66,23 @@ OFFENSIVE_TERMS = {
     "mnik": "high",
     "zabi": "high",
     "3ahra": "high",
+        # --- Tunisian Derja (Arabizi) additions ---
+    "nayek": "high",
+    "asba": "high",
+    "nami": "high",
+    "mnayek": "high",
+    "miboun": "high",
+    "tahan": "high",
+    "zebi": "high",
+    "zab": "high",
+    "m9awed": "high",
+    "zabour": "high",
+    "3ahra": "high",
+    "za3ka": "medium",
+    "bazzoula": "medium",
+    "sorm": "medium",
+    "nahchi": "high",
+    "hachwa": "medium",
 
     # --- French (common in Tunisia) ---
     "pute": "high",

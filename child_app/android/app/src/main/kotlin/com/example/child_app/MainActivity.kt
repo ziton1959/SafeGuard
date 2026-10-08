@@ -1,8 +1,11 @@
 package com.example.child_app
 
 import android.app.Activity
+import android.app.AppOpsManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -15,13 +18,18 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.provider.Settings
 import android.util.DisplayMetrics
+import java.util.Calendar
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "safeguard/ocr"
@@ -42,7 +50,6 @@ class MainActivity : FlutterActivity() {
                     "ping" -> result.success("pong from Kotlin!")
                     "testOcr" -> runTestOcr(result)
                     "startMonitoring" -> {
-                        // Ask permission ONCE, set up persistent capture.
                         pendingResult = result
                         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE)
                                 as MediaProjectionManager
@@ -51,14 +58,17 @@ class MainActivity : FlutterActivity() {
                             SCREEN_CAPTURE_REQUEST
                         )
                     }
-                    "grabFrame" -> {
-                        // Called repeatedly by the Dart timer. No permission prompt.
-                        grabFrameAndOcr(result)
-                    }
+                    "grabFrame" -> grabFrameAndOcr(result)
                     "stopMonitoring" -> {
                         cleanup()
                         result.success("stopped")
                     }
+                    "hasUsagePermission" -> result.success(hasUsageAccess())
+                    "requestUsagePermission" -> {
+                        startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                        result.success(true)
+                    }
+                    "getUsageStats" -> result.success(readUsageToday())
                     else -> result.notImplemented()
                 }
             }
@@ -104,7 +114,6 @@ class MainActivity : FlutterActivity() {
         )
 
         captureReady = true
-        // tell Dart setup succeeded so it can start the timer
         pendingResult?.success("monitoring_started")
         pendingResult = null
     }
@@ -174,5 +183,56 @@ class MainActivity : FlutterActivity() {
         recognizer.process(image)
             .addOnSuccessListener { visionText -> result.success(visionText.text) }
             .addOnFailureListener { e -> result.error("OCR_FAILED", e.message, null) }
+    }
+
+    // ---------- USAGE STATS ----------
+    private fun hasUsageAccess(): Boolean {
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = appOps.unsafeCheckOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            packageName
+        )
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun readUsageToday(): String {
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val start = cal.timeInMillis
+        val end = System.currentTimeMillis()
+
+        val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+
+        val totals = HashMap<String, Long>()
+        for (s in stats) {
+            val secs = s.totalTimeInForeground / 1000
+            if (secs > 0) {
+                totals[s.packageName] = (totals[s.packageName] ?: 0L) + secs
+            }
+        }
+
+        val pm = packageManager
+        val arr = JSONArray()
+        for ((pkg, secs) in totals) {
+            val obj = JSONObject()
+            obj.put("app", friendlyName(pm, pkg))
+            obj.put("seconds", secs)
+            arr.put(obj)
+        }
+        return arr.toString()
+    }
+
+    private fun friendlyName(pm: PackageManager, pkg: String): String {
+        return try {
+            val info = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(info).toString()
+        } catch (e: Exception) {
+            pkg
+        }
     }
 }
